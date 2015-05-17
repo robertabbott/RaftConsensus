@@ -1,0 +1,219 @@
+Implementation of Raft algorithm: Design
+
+ToC:
+Introduction -- quick description of raft
+Behavior of nodes + structs required to represent state of the node
+Leader Election
+How replicated log is handled
+
+
+############################################
+############################################
+Things to be done:
+- Read through and complete description of behaviour of servers in cluster
+- Describe structs and methods to implement said behaviour
+- Write steps for implementation... desribe steps as a git commit
+############################################
+############################################
+
+Introduction:
+Raft is a consensus algorithm. Raft achieves consensus by first electing a leader,
+then have the leader be responsible for managing the replicated log.
+Once a leader has been elected, all nodes will forward log entry requests to the
+leader. The leader will determine the order of the log entries and inform the
+servers when it is safe to store an entry.
+
+If the leader ceases action, the node that notices the leader has died will trigger
+an election.
+
+Raft can be decomposed into 3 major subproblems:
+Leader election - determining when a leader needs to be elected and then the actually
+electing of a new leader
+Log replication - How the leader receives and handles log entry requests
+Safety - Nodes in the raft cluster cannot have different entries for the same log index
+
+Raft guarantees:
+- At most there will be one leader per term
+- A leader cannot change old log entries, only add new ones
+- Entries from the same index and term will be identical
+- If a log is committed by the leader, subsequent leaders must have that log entry
+- If a node has applied an entry of a given index to its state machine no other server
+  will apply a different entry for that index
+
+
+The leader node does the following things:
+- receive requests from nodes
+- send notifications that log entries should be committed
+- send heartbeat so nodes know the leader is alive
+
+In this implementation log requests will send an rpc message to a node with a string to
+be stored. For now the log entries will be stored in memory rather than written to
+persistent storage.
+
+
+Node behaviour:
+A node can have three states: follower, candidate, leader. A node will behave differently
+depending on its state.
+
+Follower behaviour:
+- Listens for log entry requests and messages from the leader
+- Forwards log entry requests to leader
+- Appends log entries when it receives commit messages from the leader
+- If it ceases to receive messages from the leader a follower node will turn itself into
+  a candidate and send voteRequest messages to all nodes in the cluster.
+- Nodes must always track cluster membership
+- In the case of an election a follower node will vote for the node from which it
+  received the voteRequest rpc, unless the sending node is behind. If the sending node
+  is behind, the receiver will declare itself a candidate, vote for itself and
+  broadcast voteRequest rpcs to all members of the cluster
+- Followers will respond to leader heartbeats to indicate they are alive and to tell
+  the leader their highest committed index. This allows the leader to update its
+  matchIndex list
+
+// leader heartbeat
+func (r *RaftNode) handleAppendEntriesRequest (AEproto) {}
+    // if follower has an entry that conflicts with new entries from leader (same index
+    // different term) delete existing entries and follow the leader
+    // append any new entries to the log
+    // if leaderCommit > followerCommit set followerCommit to min(leaderCommit,
+    // highest commit index in the request)
+    // send ACK to leader so leader knows node is alive
+
+func (r *RaftNode) handleVoteRequest (VRproto) {
+    // check if requester term and commitIndex are > r.term and r.commitIndex
+    // if yes reply voteGranted + update term and candidateId else reply
+    // voteGranted=False
+}
+
+func (r *RaftNode) logEntryRequest () {
+    if follower: fwd to leader
+    elif leader: update log and forward entry with next append entries msg
+}
+
+Follower rpc messages:
+- entry request (from client)
+- leader heartbeat (from leader)
+- commitEntry (from leader)
+- voteRequest - if another node triggers an election the follower may receive a voteReq
+  rpc will include highest commit index of sender, follower responds to voteReq with
+  another voteReq with non-nil granted field
+- addNode - node joined cluster add to list of members
+
+Candidate behaviour:
+- Sends voteRequest rpc to every node in the cluster and waits for responses
+- Tallies votes and declares itself leader if it achieves a quorum
+- Sends leader heartbeat to declare itself leader
+
+Candidate rpc messages:
+- voteRequest
+- voteResponse (receive)
+- leader heartbeat (on election victory)
+
+Leader behaviour:
+- sends heartbeat (appendEntries) to all cluster members, heartbeat msg is repeated
+  during idle periods to prevent the timeouts that would trigger a needless election
+- receives requests from all cluster members (join, log entry)
+- if leader receive logRequest from client it appends that entry to its local log and
+  responds to requesting node after entry is applied to state machine
+- leader tracks nextIndex and matchIndex for each node in the cluster nextIndex is the
+  next unfilled index on a node
+- sends new member messages
+- sends remove member message
+
+Leader rpc messages:
+- leader heartbeat
+- commitEntry
+- join request
+- log entry request
+
+RaftNode Struct:
+The RaftNode struct will contain all information the node knows about the cluster
+as well as the node's log. RaftNode will contain the following:
+- clusterMembers - list of members addresses
+- state - node's state (candidate or follower or leader)
+- currentTerm - number of terms node has been alive -- a new term is triggered with each
+  leader election
+- votedFor - candidateId (addr) this node voted for in current term
+- log - slice containing all log entries this node has committed
+- commitIndex - highest committed log entry index
+- lastApplied - index of highest log entry applied to state machine (may not yet be
+  committed)
+
+enum state {
+    follower
+    candidate
+    leader
+}
+
+type RaftNode struct {
+    leader string // addr of current leader of the cluster
+    members []string // contains member addresses
+    state enum.Type // follower etc.
+    currentTerm int
+    votedFor string // id of candidate voted for in this term
+    log []*logEntry // slice containing log entries
+    commitIndex int // index in log known to be committed
+    lastApplied int // highest index applied to state machine
+}
+
+func (r *RaftNode) applyToStateMachine(entry *logEntry) {
+    // apply entry to state machine
+    r.lastApplied += 1
+}
+
+func (r *RaftNode) commit(entry *logEntry) {
+   // commit entry (whatever that means)
+   r.commitIndex += 1
+}
+
+
+LeaderNode Struct:
+When a RaftNode changes state to leader it will create a LeaderNode struct with the
+following information:
+- nextIndex - index of next log entry to be sent to each node in the cluster - for each
+  member this value is initialized to n+1 where n is the leaders highest committed index
+- matchIndex - for each member, lists highest index known to be committed
+
+List of RPCs:
+RequestVote: term, candidateId (address of node requesting vote), lastLogIndex (index of
+candidates highest commit), lastLogTerm (term of candidates last log entry), term (for
+candidate to set), voteGranted (set by receiver)
+- receiver sets voteGranted to false if term (of candidate) < node.CurrentTerm
+- set voteGranted true if candidates log is >= receivers
+- if voteGranted field is nil then the receiver must respond to this request
+- if voteGranted is !nil then it is a response
+
+LeaderHeartbeat / Append new entries: leader's term, leader addr, log index preceding the
+new ones, prevLogTerm: term associated with prevLogIndex entry, a list of entries:
+entries []*logEntry, leaderCommit: leader's highest
+committed index
+- follower responds by setting term and success in response
+- follower responsed false if its currentTerm is > term
+- if follower has an entry that conflicts with new entries from leader (same index
+  different term) delete existing entries and follow the leader
+- append any new entries to the log
+- if leaderCommit > followerCommit set followerCommit to min(leaderCommit, highest commit
+  index in the request)
+
+Step 1: Implementing Leader Election
+Implement structure of Raft:
+- implement node structs
+- right RPC messages
+- provide a way for nodes to communicate based on their config
+- implement leader election
+- write harness that will launch a raft cluster based on a config
+- write leader election integration tests
+
+What it should do:
+- a node should be able to run the raft service
+- given a 'well known address' the node should be able to join a 'cluster' for now the
+  assumption will be that the node with the WKN doesn't go down
+- nodes should be able to elect a leader
+- log entry requests don't yet matter; all that matters is that a leader is elected
+- the leader will send heartbeats to ensure timeouts work properly, then the test will
+  kill the leader and verify that an election is triggered
+- 'nodes' will probably be docker containers running raft that are bound to a particular
+  port on localhost
+- failure modes to be handled: leader dies and election is triggered
+- handled in the next stage: leader misses requests and falls behind; leader becomes
+  unresponsive but comes back up later
