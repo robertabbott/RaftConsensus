@@ -91,9 +91,7 @@ func (r *RaftNode) logEntryRequest () {
 }
 
 Follower rpc messages:
-- entry request (from client)
-- leader heartbeat (from leader)
-- commitEntry (from leader)
+- leader heartbeat (appendEntries)
 - voteRequest - if another node triggers an election the follower may receive a voteReq
   rpc will include highest commit index of sender, follower responds to voteReq with
   another voteReq with non-nil granted field
@@ -182,6 +180,16 @@ candidate to set), voteGranted (set by receiver)
 - set voteGranted true if candidates log is >= receivers
 - if voteGranted field is nil then the receiver must respond to this request
 - if voteGranted is !nil then it is a response
+
+Handling RPC messages and responses:
+All nodes must be able to listen for and handle multiple message types. Rather than truly have multiple messages there will be one rpc type: RaftRPC that will include an
+interface. This allows RaftRPC to wrap the other RPC messages. Once the message is
+received the response will be handled based on the type inferred from the message
+contents.
+- for now (until we handle client requests) followers act as client for other node's
+  heartbeats and voteRequests
+- followers should listen on some port for incoming connections and respond to rpcs it
+  receives when it is connected to
 
 LeaderHeartbeat / Append new entries: leader's term, leader addr, log index preceding the
 new ones, prevLogTerm: term associated with prevLogIndex entry, a list of entries:
