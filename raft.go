@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"net"
 	"sync"
 )
@@ -20,6 +21,7 @@ type RaftNode struct {
 	State  State
 	config *RaftConfig
 
+	logDataLock sync.RWMutex // guards log metadata
 	currentTerm int
 	votedFor    string
 	commitIndex int
@@ -50,20 +52,6 @@ func initRaft(config *RaftConfig) *RaftNode {
 }
 
 func (r *RaftNode) RunRaft() error {
-	// setup networking to receive RPCs
-
-	// we need to be able to operate on the RaftNode based on the RPC we receive.
-	// To check information in the struct to determine our response and to change
-	// information in the struct based on the message we are receiving.
-	//
-	// listenForRPCs will connect to a port and receive RPC messages from the leader
-	// or from candidates
-	//
-	// The server will run RaftRPC methods. The question is how do we give the RaftRPC
-	// methods access to the RaftNode struct
-
-	///////////////
-	// This needs to be rethought since ServeConn blocks and fucks everything up...
 	for {
 		if r.State == FOLLOWER {
 			r.runFollower()
@@ -80,9 +68,34 @@ func (r *RaftNode) RunRaft() error {
 
 // runs as follower until node changes state
 func (r *RaftNode) runFollower() {
-	ch := make(chan int, 1)
-	go startTimeout(ch)
+	tochan := make(chan int, 1)
+	go startTimeout(tochan)
 	for {
+		go r.RunTCPServer()
+		for {
+			select {
+			case to := <-tochan:
+				if to == int(TIMEOUT_ELAPSED) {
+					r.State = CANDIDATE
+				}
+				return
+			case rpc := <-r.rpcCh:
+				switch rpc.(type) {
+				case *AppendEntries:
+					r.appendEntries(rpc.(*AppendEntries))
+				case *AppendEntriesResp:
+					r.appendEntriesResp(rpc.(*AppendEntriesResp))
+				case *RequestVote:
+					r.requestVote(rpc.(*RequestVote))
+				case *RequestVoteResp:
+					r.requestVoteResp(rpc.(*RequestVoteResp))
+				default:
+					fmt.Println("fuck")
+					return
+				}
+				go startTimeout(tochan)
+			}
+		}
 	}
 }
 

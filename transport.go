@@ -2,7 +2,6 @@ package raft
 
 import (
 	"encoding/gob"
-	"fmt"
 	"log"
 	"net"
 )
@@ -11,17 +10,15 @@ type TestRPC struct {
 	S string
 }
 
-func HandleConnection(conn net.Conn) {
+func HandleConnection(conn net.Conn, ch chan interface{}) {
 	dec := gob.NewDecoder(conn)
 	p := &TestRPC{}
 	dec.Decode(p)
-	fmt.Println(p.S)
-	// return struct type
+	ch <- p // put struct in ch
 }
 
-func (r *RaftNode) RunTCPServer(port string) {
-	fmt.Println("start")
-	ln, err := net.Listen("tcp", port)
+func (r *RaftNode) RunTCPServer() {
+	ln, err := net.Listen("tcp", getPort(r.config.addr))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -30,19 +27,15 @@ func (r *RaftNode) RunTCPServer(port string) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go HandleConnection(conn) // a goroutine handles conn so that the loop can accept other connections
-		rpc := <-r.rpcCh
-		switch rpc.(type) {
-		case *AppendEntries:
-			r.appendEntries(rpc.(*AppendEntries))
-		case *AppendEntriesResp:
-			r.appendEntriesResp(rpc.(*AppendEntriesResp))
-		case *RequestVote:
-			r.requestVote(rpc.(*RequestVote))
-		case *RequestVoteResp:
-			r.requestVoteResp(rpc.(*RequestVoteResp))
-		}
+		go HandleConnection(conn, r.rpcCh) // a goroutine handles conn so that the loop can accept other connections
 	}
+}
+
+func SendStructTCP(addr, msg string) {
+	conn := ConnectTCP(addr)
+	T := TestRPC{S: msg}
+	sendStruct(T, conn)
+	conn.Close()
 }
 
 func ConnectTCP(addr string) net.Conn {
@@ -59,16 +52,4 @@ func sendStruct(st interface{}, conn net.Conn) {
 	if err != nil {
 		log.Fatal(err)
 	}
-}
-
-func closeConn(conn net.Conn) {
-	conn.Close()
-}
-
-func SendStructTCP(addr, msg string) {
-	conn := ConnectTCP(addr)
-	T := TestRPC{S: msg}
-	sendStruct(T, conn)
-	closeConn(conn)
-
 }
