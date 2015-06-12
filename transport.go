@@ -18,7 +18,7 @@ func HandleConnection(conn net.Conn, ch chan interface{}) {
 }
 
 func (r *RaftNode) RunTCPServer() {
-	ln, err := net.Listen("tcp", getPort(r.config.addr))
+	ln, err := net.Listen("tcp", ":"+getPort(r.config.addr))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -31,10 +31,9 @@ func (r *RaftNode) RunTCPServer() {
 	}
 }
 
-func SendStructTCP(addr, msg string) {
+func SendStructTCP(addr string, st interface{}) {
 	conn := ConnectTCP(addr)
-	T := TestRPC{S: msg}
-	sendStruct(T, conn)
+	sendStruct(st, conn)
 	conn.Close()
 }
 

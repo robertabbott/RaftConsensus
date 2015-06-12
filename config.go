@@ -9,7 +9,15 @@ type RaftConfig struct {
 
 func DefaultConfig() *RaftConfig {
 	c := &RaftConfig{
-		addr: "localhost:6868",
+		addr: "localhost:6767",
+	}
+	return c
+}
+
+func CreateConfig(addr string, members []string) *RaftConfig {
+	c := &RaftConfig{
+		addr:    addr,
+		members: members,
 	}
 	return c
 }

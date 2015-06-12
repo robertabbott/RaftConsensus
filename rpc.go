@@ -4,6 +4,11 @@ import (
 	"sync"
 )
 
+const (
+	AppendEntriesRPC uint8 = iota
+	RequestVoteRPC
+)
+
 // defines rpc messages that can be sent
 
 type RaftRPC struct {
@@ -17,22 +22,6 @@ type RaftRPC struct {
 type RaftRPCResp struct {
 	msg interface{}
 	err error
-}
-
-type RequestVote struct {
-	candidateTerm int
-	candidateId   string // addr of candidate
-
-	lastLogIndex int // index of candidates highest commit
-	lastLogTerm  int // term of candidates highest log entry
-}
-
-type RequestVoteResp struct {
-	voterId string // addr of voter
-
-	// follower votes for a candidate if candidate is more up to date. voteGranted is
-	// set to false if the followers term > candidateTerm
-	voteGranted bool
 }
 
 type AppendEntries struct {
@@ -52,21 +41,59 @@ type AppendEntriesResp struct {
 	followerCommit int  // highest index committed by follower
 }
 
-const (
-	AppendEntriesRPC uint8 = iota
-	RequestVoteRPC
-)
+type RequestVote struct {
+	CandidateTerm int
+	CandidateId   string // addr of candidate
+
+	LastLogIndex int // index of candidates highest commit
+	LastLogTerm  int // term of candidates highest log entry
+}
+
+type RequestVoteResp struct {
+	VoterId string // addr of voter
+
+	// follower votes for a candidate if candidate is more up to date. VoteGranted is
+	// set to false if the followers term > CandidateTerm
+	VoteGranted bool
+}
 
 // methods for sending/receiving rpc messages
 
 // Server exports RaftNode object and exposes HandleVoteReq to client
-func (r *RaftNode) requestVote(req *RequestVote) error {
-
+func (r *RaftNode) HandleVoteRequest(req *RequestVote) error {
+	resp := RequestVoteResp{}
+	if r.State == FOLLOWER {
+		if r.currentTerm < req.CandidateTerm {
+			resp.VoteGranted = true
+		}
+	} else if r.State == CANDIDATE || r.State == LEADER {
+		if r.currentTerm < req.CandidateTerm {
+			r.State = FOLLOWER
+			resp.VoteGranted = true
+		} else {
+			resp.VoteGranted = false
+		}
+	}
+	go SendStructTCP(req.CandidateId, resp)
 	return nil
 }
 
-func (r *RaftNode) requestVoteResp(req *RequestVoteResp) error {
+func (r *RaftNode) HandleVoteReqResp(req *RequestVoteResp, count *int) error {
+	if r.State == CANDIDATE && req.VoteGranted == true {
+		*count += 1
+	}
+	return nil
+}
 
+func (r *RaftNode) SendRequestVote(addr string) error {
+	rv := RequestVote{
+		CandidateTerm: r.currentTerm,
+		CandidateId:   r.config.addr,
+
+		LastLogIndex: r.commitIndex,
+		LastLogTerm:  r.commitTerm,
+	}
+	go SendStructTCP(addr, rv)
 	return nil
 }
 
