@@ -6,11 +6,10 @@ import (
 	"time"
 )
 
-const TimeoutMax = 800
-const TimeoutMin = 300
+const TimeoutMax = 3000
+const TimeoutMin = 500
 
 func random(min, max int) int {
-	rand.Seed(time.Now().Unix())
 	return rand.Intn(max-min) + min
 }
 

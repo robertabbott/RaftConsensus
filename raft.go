@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"time"
 )
 
 type State int
@@ -31,37 +30,57 @@ type RaftNode struct {
 	commitTerm  int // term in highest committed log entry
 	lastApplied int
 
-	tochan chan int
-	rpcCh  chan interface{}
-	conn   net.Conn
+	tochan     chan int
+	shutdownCh chan bool
+	serverCh   chan *net.TCPListener // stores server connections
+	rpcCh      chan *RaftRPC         // chan for RPCs from raft members
+	reqCh      chan interface{}      // chan for client requests
+	conn       net.Conn
 
-	leaderLock sync.RWMutex // guards leader
-	leader     string
-
+	leaderLock  sync.RWMutex // guards leader
+	leader      string
 	leaderState *LeaderState // only used when this node is leader
+
+	Log []*LogEntry
 
 	logger *log.Logger
 }
 
 type LeaderState struct {
-	commitCh                chan struct{}
-	replicationState        map[string]int // member addr -> index known to be replicated
-	doWhatNoDictatorEverHas chan struct{}  // relinquish power
+	commitCh                chan interface{}
+	replicatedIndex         map[string]int   // member addr -> index known to be replicated
+	doWhatNoDictatorEverHas chan interface{} // relinquish power
 }
 
 // initialize RaftNode struct
 func initRaft(config *RaftConfig) *RaftNode {
+	ls := newLeaderState(config.members)
 	r := &RaftNode{
-		State:  FOLLOWER,
-		config: config,
-		logger: log.New(os.Stdout, "", log.LstdFlags),
-		tochan: make(chan int, 1),
-		rpcCh:  make(chan interface{}, 1),
+		State:       FOLLOWER,
+		config:      config,
+		logger:      log.New(os.Stdout, "", log.LstdFlags),
+		tochan:      make(chan int, 1),
+		rpcCh:       make(chan *RaftRPC, 1),
+		leaderState: ls,
+		Log:         []*LogEntry{},
 	}
 	return r
 }
 
+func newLeaderState(members []string) *LeaderState {
+	ls := &LeaderState{
+		commitCh:                make(chan interface{}, 1),
+		doWhatNoDictatorEverHas: make(chan interface{}, 1),
+		replicatedIndex:         make(map[string]int),
+	}
+	for _, member := range members {
+		ls.replicatedIndex[member] = 0
+	}
+	return ls
+}
+
 func (r *RaftNode) RunRaft() error {
+	go r.RunTCPServer()
 	for {
 		if r.State == FOLLOWER {
 			r.runFollower()
@@ -70,7 +89,7 @@ func (r *RaftNode) RunRaft() error {
 		} else if r.State == LEADER {
 			r.runLeader()
 		} else {
-			r.shutdown()
+			r.Shutdown()
 			return nil
 		}
 	}
@@ -79,7 +98,6 @@ func (r *RaftNode) RunRaft() error {
 // runs as follower until node changes state
 func (r *RaftNode) runFollower() {
 	receivedRPC := false
-	go r.RunTCPServer()
 	go startTimeout(r.tochan)
 	r.logger.Printf("started TCP server")
 	for {
@@ -89,23 +107,26 @@ func (r *RaftNode) runFollower() {
 				receivedRPC = false
 				continue
 			} else if to == int(TIMEOUT_ELAPSED) {
+				log.Printf("[INFO] switching to candidate")
 				r.State = CANDIDATE
 				r.currentTerm += 1
 			}
-			r.logger.Printf("[INFO] timed out. Switching to candidate")
 			return
 		case rpc := <-r.rpcCh:
 			r.logger.Printf("[INFO] received rpc")
 			receivedRPC = true
-			switch rpc.(type) {
-			case *AppendEntries:
-				r.appendEntries(rpc.(*AppendEntries))
-			case *AppendEntriesResp:
-				r.appendEntriesResp(rpc.(*AppendEntriesResp))
-			case *RequestVote:
-				r.HandleVoteRequest(rpc.(*RequestVote))
+			switch rpc.St.(type) {
+			case AppendEntries:
+				r.HandleAppendEntries(rpc.St.(AppendEntries))
+			case AppendEntriesResp:
+				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
+			case RequestVote:
+				r.HandleVoteRequest(rpc.St.(RequestVote))
 			default:
-				fmt.Println("fuck")
+				return
+			}
+		case sd := <-r.shutdownCh:
+			if sd == true {
 				return
 			}
 			go startTimeout(r.tochan)
@@ -121,6 +142,7 @@ func (r *RaftNode) runCandidate() {
 	majority := len(r.config.members) / 2
 
 	for _, member := range r.config.members {
+		//r.logger.Printf("[CANDIDATE] %s sending rv req to %s", r.config.addr, member)
 		go r.SendRequestVote(member)
 	}
 	// read from rpcCh until majority is achieved
@@ -130,42 +152,80 @@ func (r *RaftNode) runCandidate() {
 		go startTimeout(r.tochan)
 		select {
 		case rpc := <-r.rpcCh:
-			switch rpc.(type) {
-			case *AppendEntries:
-				r.appendEntries(rpc.(*AppendEntries))
-			case *AppendEntriesResp:
-				r.appendEntriesResp(rpc.(*AppendEntriesResp))
-			case *RequestVote:
-				r.HandleVoteRequest(rpc.(*RequestVote))
-			case *RequestVoteResp:
-				r.HandleVoteReqResp(rpc.(*RequestVoteResp), &voteCount)
+			switch rpc.St.(type) {
+			case AppendEntries:
+				r.HandleAppendEntries(rpc.St.(AppendEntries))
+			case AppendEntriesResp:
+				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
+			case RequestVote:
+				r.HandleVoteRequest(rpc.St.(RequestVote))
+			case RequestVoteResp:
+				r.HandleVoteReqResp(rpc.St.(RequestVoteResp), &voteCount)
 			default:
-				fmt.Println("fuck")
-				return
+				fmt.Println(rpc.St)
+				r.logger.Printf("%+v\n", rpc)
 			}
 		case _ = <-r.tochan:
+			r.logger.Printf("[INFO] %s received %d votes", r.config.addr, voteCount)
 			electionTimeout += 1
 			go startTimeout(r.tochan)
+		case sd := <-r.shutdownCh:
+			if sd == true {
+				return
+			}
 		}
 		if voteCount > majority {
+			r.logger.Printf("[LEADER] taking power %s", r.config.addr)
 			r.State = LEADER
 			return
 		}
 		if electionTimeout > 2 {
 			r.currentTerm += 1
 			electionTimeout = 0
+			voteCount = 1
+			r.logger.Printf("[INFO] term is %d", r.currentTerm)
+			for _, member := range r.config.members {
+				go r.SendRequestVote(member)
+			}
 		}
 	}
 }
 
 // runs as leader until node changes state
 func (r *RaftNode) runLeader() {
-	r.logger.Printf("taking up the mantle of leadership")
-	time.Sleep(5 * time.Second)
+	r.logger.Printf("[INFO] %s is now leader", r.config.addr)
+	//go r.ServeClientTCP()
+	for r.State == LEADER {
+		r.logger.Printf("[LEADER] sending heartbeats")
+		for _, member := range r.config.members {
+			go r.SendHeartbeat(member)
+			r.logger.Printf("sent heartbeat to %s", member)
+		}
+		select {
+		case rpc := <-r.rpcCh:
+			switch rpc.St.(type) {
+			case AppendEntries:
+				r.HandleAppendEntries(rpc.St.(AppendEntries))
+			case AppendEntriesResp:
+				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
+			case RequestVote:
+				r.HandleVoteRequest(rpc.St.(RequestVote))
+			}
+		case sd := <-r.shutdownCh:
+			if sd == true {
+				return
+			}
+		}
+	}
 }
 
-func (r *RaftNode) shutdown() {
-
+func (r *RaftNode) Shutdown() {
+	conn := <-r.serverCh
+	for conn != nil {
+		ShutdownServer(conn)
+		conn = <-r.serverCh
+	}
+	r.shutdownCh <- true
 }
 
 func main() {

@@ -6,13 +6,9 @@ import (
 	"net"
 )
 
-type TestRPC struct {
-	S string
-}
-
-func HandleConnection(conn net.Conn, ch chan interface{}) {
+func HandleConnection(conn net.Conn, ch chan *RaftRPC) {
 	dec := gob.NewDecoder(conn)
-	p := &TestRPC{}
+	p := &RaftRPC{}
 	dec.Decode(p)
 	ch <- p // put struct in ch
 }
@@ -31,9 +27,16 @@ func (r *RaftNode) RunTCPServer() {
 	}
 }
 
+func (r *RaftNode) ServeClientTCP() {
+	// listen for client requests
+}
+
 func SendStructTCP(addr string, st interface{}) {
 	conn := ConnectTCP(addr)
-	sendStruct(st, conn)
+	rrpc := &RaftRPC{
+		St: st,
+	}
+	sendStruct(rrpc, conn)
 	conn.Close()
 }
 
@@ -45,10 +48,16 @@ func ConnectTCP(addr string) net.Conn {
 	return conn
 }
 
-func sendStruct(st interface{}, conn net.Conn) {
+func sendStruct(st *RaftRPC, conn net.Conn) {
+	//gob.Register(st)
+	gob.Register(st.St)
 	enc := gob.NewEncoder(conn)
 	err := enc.Encode(st)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func ShutdownServer(conn *net.TCPListener) {
+	conn.Close()
 }
