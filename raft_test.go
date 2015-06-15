@@ -42,7 +42,4 @@ func TestRun3Raft(t *testing.T) {
 	fmt.Println(r1.State)
 	fmt.Println(r2.State)
 	fmt.Println(r3.State)
-	r1.Shutdown()
-	r2.Shutdown()
-	r3.Shutdown()
 }

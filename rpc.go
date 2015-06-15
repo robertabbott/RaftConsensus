@@ -59,12 +59,11 @@ func (r *RaftNode) HandleAppendEntriesResp(req AppendEntriesResp) error {
 
 func (r *RaftNode) HandleAppendEntries(req AppendEntries) error {
 	if r.State == CANDIDATE || r.State == LEADER {
-		if r.currentTerm < req.LeaderTerm {
+		if r.currentTerm <= req.LeaderTerm {
 			r.State = FOLLOWER
 		}
 	}
 	resp := AppendEntriesResp{
-		Term: r.currentTerm,
 		Addr: r.config.addr,
 	}
 	if r.currentTerm > req.LeaderTerm {
@@ -81,6 +80,7 @@ func (r *RaftNode) HandleAppendEntries(req AppendEntries) error {
 	r.currentTerm = req.LeaderTerm
 	r.commitIndex = len(r.Log) - 1
 
+	resp.Term = r.currentTerm
 	resp.FollowerCommit = len(r.Log) - 1
 	go SendStructTCP(req.Addr, resp)
 
@@ -117,14 +117,11 @@ func (r *RaftNode) SendHeartbeat(addr string) error {
 func (r *RaftNode) HandleVoteRequest(req RequestVote) error {
 	resp := RequestVoteResp{}
 	if r.State == FOLLOWER {
-		r.logger.Printf("im a follower")
-		r.logger.Printf("my term is: %d, candidate term is %d", r.currentTerm, req.CandidateTerm)
 		if r.currentTerm < req.CandidateTerm {
 			resp.VoteGranted = true
 			r.votedFor = req.CandidateId
 		}
 	} else if r.State == CANDIDATE || r.State == LEADER {
-		r.logger.Printf("my term is: %d, candidate term is %d", r.currentTerm, req.CandidateTerm)
 		if r.currentTerm < req.CandidateTerm {
 			r.State = FOLLOWER
 			resp.VoteGranted = true

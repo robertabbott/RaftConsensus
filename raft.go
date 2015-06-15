@@ -1,7 +1,7 @@
 package raft
 
 import (
-	"fmt"
+	"errors"
 	"log"
 	"net"
 	"os"
@@ -32,9 +32,8 @@ type RaftNode struct {
 
 	tochan     chan int
 	shutdownCh chan bool
-	serverCh   chan *net.TCPListener // stores server connections
-	rpcCh      chan *RaftRPC         // chan for RPCs from raft members
-	reqCh      chan interface{}      // chan for client requests
+	rpcCh      chan *RaftRPC    // chan for RPCs from raft members
+	reqCh      chan interface{} // chan for client requests
 	conn       net.Conn
 
 	leaderLock  sync.RWMutex // guards leader
@@ -89,8 +88,7 @@ func (r *RaftNode) RunRaft() error {
 		} else if r.State == LEADER {
 			r.runLeader()
 		} else {
-			r.Shutdown()
-			return nil
+			return errors.New("Raft put in invalid state")
 		}
 	}
 }
@@ -162,7 +160,6 @@ func (r *RaftNode) runCandidate() {
 			case RequestVoteResp:
 				r.HandleVoteReqResp(rpc.St.(RequestVoteResp), &voteCount)
 			default:
-				fmt.Println(rpc.St)
 				r.logger.Printf("%+v\n", rpc)
 			}
 		case _ = <-r.tochan:
@@ -229,15 +226,6 @@ func (r *RaftNode) NoOp() {
 	r.Log = append(r.Log, noop)
 	r.commitIndex += 1
 	r.commitTerm += 1
-}
-
-func (r *RaftNode) Shutdown() {
-	conn := <-r.serverCh
-	for conn != nil {
-		ShutdownServer(conn)
-		conn = <-r.serverCh
-	}
-	r.shutdownCh <- true
 }
 
 func main() {
