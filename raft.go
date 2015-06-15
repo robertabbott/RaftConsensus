@@ -195,6 +195,7 @@ func (r *RaftNode) runCandidate() {
 func (r *RaftNode) runLeader() {
 	r.logger.Printf("[INFO] %s is now leader", r.config.addr)
 	//go r.ServeClientTCP()
+	r.NoOp() // commit noop entry
 	for r.State == LEADER {
 		r.logger.Printf("[LEADER] sending heartbeats")
 		for _, member := range r.config.members {
@@ -217,6 +218,17 @@ func (r *RaftNode) runLeader() {
 			}
 		}
 	}
+}
+
+func (r *RaftNode) NoOp() {
+	noop := &LogEntry{
+		Index: r.commitIndex,
+		Term:  r.commitTerm,
+		Type:  NOOP,
+	}
+	r.Log = append(r.Log, noop)
+	r.commitIndex += 1
+	r.commitTerm += 1
 }
 
 func (r *RaftNode) Shutdown() {

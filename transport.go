@@ -49,7 +49,6 @@ func ConnectTCP(addr string) net.Conn {
 }
 
 func sendStruct(st *RaftRPC, conn net.Conn) {
-	//gob.Register(st)
 	gob.Register(st.St)
 	enc := gob.NewEncoder(conn)
 	err := enc.Encode(st)
