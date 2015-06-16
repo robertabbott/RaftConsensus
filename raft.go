@@ -46,9 +46,8 @@ type RaftNode struct {
 }
 
 type LeaderState struct {
-	commitCh                chan interface{}
-	replicatedIndex         map[string]int   // member addr -> index known to be replicated
-	doWhatNoDictatorEverHas chan interface{} // relinquish power
+	commitCh        chan interface{}
+	replicatedIndex map[string]int // member addr -> index known to be replicated
 }
 
 // initialize RaftNode struct
@@ -140,7 +139,6 @@ func (r *RaftNode) runCandidate() {
 	majority := len(r.config.members) / 2
 
 	for _, member := range r.config.members {
-		//r.logger.Printf("[CANDIDATE] %s sending rv req to %s", r.config.addr, member)
 		go r.SendRequestVote(member)
 	}
 	// read from rpcCh until majority is achieved
@@ -194,10 +192,8 @@ func (r *RaftNode) runLeader() {
 	//go r.ServeClientTCP()
 	r.NoOp() // commit noop entry
 	for r.State == LEADER {
-		r.logger.Printf("[LEADER] sending heartbeats")
 		for _, member := range r.config.members {
 			go r.SendHeartbeat(member)
-			r.logger.Printf("sent heartbeat to %s", member)
 		}
 		select {
 		case rpc := <-r.rpcCh:
@@ -213,6 +209,8 @@ func (r *RaftNode) runLeader() {
 			if sd == true {
 				return
 			}
+		default:
+			continue
 		}
 	}
 }

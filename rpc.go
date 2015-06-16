@@ -76,12 +76,12 @@ func (r *RaftNode) HandleAppendEntries(req AppendEntries) error {
 
 	// TODO these entries might not be properly committed...
 	// update log and send response
-	r.Log = append(r.Log, req.NewEntries...)
+	r.Log = append(r.Log[:req.PrevLogIndex], req.NewEntries...)
 	r.currentTerm = req.LeaderTerm
 	r.commitIndex = len(r.Log) - 1
 
 	resp.Term = r.currentTerm
-	resp.FollowerCommit = len(r.Log) - 1
+	resp.FollowerCommit = r.commitIndex
 	go SendStructTCP(req.Addr, resp)
 
 	// update leader if necessary
