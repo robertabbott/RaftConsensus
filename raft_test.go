@@ -39,6 +39,17 @@ func TestRun3Raft(t *testing.T) {
 	// some issues with networking stuff
 
 	time.Sleep(10 * time.Second)
+	if r1.State == LEADER {
+		fmt.Println("killing 6868")
+		r1.Shutdown()
+	} else if r2.State == LEADER {
+		fmt.Println("killing 7070")
+		r2.Shutdown()
+	} else if r3.State == LEADER {
+		fmt.Println("killing 6969")
+		r3.Shutdown()
+	}
+	time.Sleep(10 * time.Second)
 	fmt.Println(r1.State)
 	fmt.Println(r2.State)
 	fmt.Println(r3.State)

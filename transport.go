@@ -29,6 +29,9 @@ func (r *RaftNode) RunTCPServer() {
 
 func SendStructTCP(addr string, st interface{}) {
 	conn := ConnectTCP(addr)
+	if conn == nil {
+		return
+	}
 	rrpc := &RaftRPC{
 		St: st,
 	}
@@ -39,7 +42,7 @@ func SendStructTCP(addr string, st interface{}) {
 func ConnectTCP(addr string) net.Conn {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log.Fatal(err)
+		return nil
 	}
 	return conn
 }

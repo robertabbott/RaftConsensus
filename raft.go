@@ -31,11 +31,13 @@ type RaftNode struct {
 	commitTerm  int // term in highest committed log entry
 	lastApplied int
 
-	tochan     chan int
 	shutdownCh chan bool
-	rpcCh      chan *RaftRPC    // chan for RPCs from raft members
-	reqCh      chan interface{} // chan for client requests
-	conn       net.Conn
+	sd         bool
+
+	tochan chan int
+	rpcCh  chan *RaftRPC    // chan for RPCs from raft members
+	reqCh  chan interface{} // chan for client requests
+	conn   net.Conn
 
 	leaderLock  sync.RWMutex // guards leader
 	leader      string
@@ -89,6 +91,11 @@ func (r *RaftNode) RunRaft() error {
 		} else {
 			return errors.New("Raft put in invalid state")
 		}
+
+		if r.sd == true {
+			r.logger.Printf("[INFO] shutting down")
+			return nil
+		}
 	}
 }
 
@@ -96,7 +103,7 @@ func (r *RaftNode) RunRaft() error {
 func (r *RaftNode) runFollower() {
 	receivedRPC := false
 	go startTimeout(r.tochan)
-	r.logger.Printf("started TCP server")
+	r.logger.Printf("[INFO] %s running as follower", r.config.addr)
 	for {
 		select {
 		case to := <-r.tochan:
@@ -113,6 +120,7 @@ func (r *RaftNode) runFollower() {
 			r.HandleRPC(rpc)
 		case sd := <-r.shutdownCh:
 			if sd == true {
+				r.sd = true
 				return
 			}
 			go startTimeout(r.tochan)
@@ -137,13 +145,18 @@ func (r *RaftNode) runCandidate() {
 		go startTimeout(r.tochan)
 		select {
 		case rpc := <-r.rpcCh:
+			r.logger.Printf("[INFO] candidate received rpc")
 			r.HandleRPC(rpc)
+			if r.State != CANDIDATE {
+				return
+			}
 		case _ = <-r.tochan:
 			r.logger.Printf("[INFO] %s received %d votes", r.config.addr, r.voteCount)
 			electionTimeout += 1
 			go startTimeout(r.tochan)
 		case sd := <-r.shutdownCh:
 			if sd == true {
+				r.sd = true
 				return
 			}
 		}
@@ -168,6 +181,7 @@ func (r *RaftNode) runCandidate() {
 func (r *RaftNode) runLeader() {
 	r.logger.Printf("[INFO] %s is now leader", r.config.addr)
 	r.NoOp() // commit noop entry
+	go startTimeout(r.tochan)
 	for r.State == LEADER {
 		for _, member := range r.config.members {
 			go r.SendHeartbeat(member)
@@ -175,12 +189,15 @@ func (r *RaftNode) runLeader() {
 		select {
 		case rpc := <-r.rpcCh:
 			r.HandleRPC(rpc)
+		case _ = <-r.tochan:
+			for _, member := range r.config.members {
+				go r.SendHeartbeat(member)
+			}
 		case sd := <-r.shutdownCh:
 			if sd == true {
+				r.sd = true
 				return
 			}
-		default:
-			continue
 		}
 	}
 }
@@ -211,6 +228,10 @@ func (r *RaftNode) NoOp() {
 	r.Log = append(r.Log, noop)
 	r.commitIndex += 1
 	r.commitTerm += 1
+}
+
+func (r *RaftNode) Shutdown() {
+	r.shutdownCh <- true
 }
 
 func main() {
