@@ -23,6 +23,8 @@ type RaftNode struct {
 	State  State
 	config *RaftConfig
 
+	voteCount int // node votes for itself
+
 	currentTerm int
 	votedFor    string
 	commitIndex int
@@ -108,20 +110,7 @@ func (r *RaftNode) runFollower() {
 			}
 			return
 		case rpc := <-r.rpcCh:
-			r.logger.Printf("[INFO] received rpc")
-			receivedRPC = true
-			switch rpc.St.(type) {
-			case AppendEntries:
-				r.HandleAppendEntries(rpc.St.(AppendEntries))
-			case AppendEntriesResp:
-				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
-			case RequestVote:
-				r.HandleVoteRequest(rpc.St.(RequestVote))
-			case ClientRequest:
-				r.HandleClientRequest(rpc.St.(ClientRequest))
-			default:
-				return
-			}
+			r.HandleRPC(rpc)
 		case sd := <-r.shutdownCh:
 			if sd == true {
 				return
@@ -133,7 +122,7 @@ func (r *RaftNode) runFollower() {
 
 // runs as candidate until node changes state
 func (r *RaftNode) runCandidate() {
-	voteCount := 1 // node votes for itself
+	r.voteCount = 1
 	electionTimeout := 0
 	r.votedFor = r.config.addr
 	majority := len(r.config.members) / 2
@@ -148,22 +137,9 @@ func (r *RaftNode) runCandidate() {
 		go startTimeout(r.tochan)
 		select {
 		case rpc := <-r.rpcCh:
-			switch rpc.St.(type) {
-			case AppendEntries:
-				r.HandleAppendEntries(rpc.St.(AppendEntries))
-			case AppendEntriesResp:
-				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
-			case RequestVote:
-				r.HandleVoteRequest(rpc.St.(RequestVote))
-			case RequestVoteResp:
-				r.HandleVoteReqResp(rpc.St.(RequestVoteResp), &voteCount)
-			case ClientRequest:
-				r.HandleClientRequest(rpc.St.(ClientRequest))
-			default:
-				r.logger.Printf("%+v\n", rpc)
-			}
+			r.HandleRPC(rpc)
 		case _ = <-r.tochan:
-			r.logger.Printf("[INFO] %s received %d votes", r.config.addr, voteCount)
+			r.logger.Printf("[INFO] %s received %d votes", r.config.addr, r.voteCount)
 			electionTimeout += 1
 			go startTimeout(r.tochan)
 		case sd := <-r.shutdownCh:
@@ -171,7 +147,7 @@ func (r *RaftNode) runCandidate() {
 				return
 			}
 		}
-		if voteCount > majority {
+		if r.voteCount > majority {
 			r.logger.Printf("[LEADER] taking power %s", r.config.addr)
 			r.State = LEADER
 			return
@@ -179,7 +155,7 @@ func (r *RaftNode) runCandidate() {
 		if electionTimeout > 2 {
 			r.currentTerm += 1
 			electionTimeout = 0
-			voteCount = 1
+			r.voteCount = 1
 			r.logger.Printf("[INFO] term is %d", r.currentTerm)
 			for _, member := range r.config.members {
 				go r.SendRequestVote(member)
@@ -198,16 +174,7 @@ func (r *RaftNode) runLeader() {
 		}
 		select {
 		case rpc := <-r.rpcCh:
-			switch rpc.St.(type) {
-			case AppendEntries:
-				r.HandleAppendEntries(rpc.St.(AppendEntries))
-			case AppendEntriesResp:
-				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
-			case RequestVote:
-				r.HandleVoteRequest(rpc.St.(RequestVote))
-			case ClientRequest:
-				r.HandleClientRequest(rpc.St.(ClientRequest))
-			}
+			r.HandleRPC(rpc)
 		case sd := <-r.shutdownCh:
 			if sd == true {
 				return
@@ -215,6 +182,23 @@ func (r *RaftNode) runLeader() {
 		default:
 			continue
 		}
+	}
+}
+
+func (r *RaftNode) HandleRPC(rpc *RaftRPC) {
+	switch rpc.St.(type) {
+	case AppendEntries:
+		r.HandleAppendEntries(rpc.St.(AppendEntries))
+	case AppendEntriesResp:
+		r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
+	case RequestVote:
+		r.HandleVoteRequest(rpc.St.(RequestVote))
+	case RequestVoteResp:
+		r.HandleVoteReqResp(rpc.St.(RequestVoteResp), &r.voteCount)
+	case ClientRequest:
+		r.HandleClientRequest(rpc.St.(ClientRequest))
+	default:
+		r.logger.Printf("[ERROR] received unknown RPC: %+v\n", rpc)
 	}
 }
 
