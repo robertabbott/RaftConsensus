@@ -23,7 +23,6 @@ type RaftNode struct {
 	State  State
 	config *RaftConfig
 
-	logDataLock sync.RWMutex // guards log metadata
 	currentTerm int
 	votedFor    string
 	commitIndex int
@@ -67,9 +66,8 @@ func initRaft(config *RaftConfig) *RaftNode {
 
 func newLeaderState(members []string) *LeaderState {
 	ls := &LeaderState{
-		commitCh:                make(chan interface{}, 1),
-		doWhatNoDictatorEverHas: make(chan interface{}, 1),
-		replicatedIndex:         make(map[string]int),
+		commitCh:        make(chan interface{}, 1),
+		replicatedIndex: make(map[string]int),
 	}
 	for _, member := range members {
 		ls.replicatedIndex[member] = 0
@@ -119,6 +117,8 @@ func (r *RaftNode) runFollower() {
 				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
 			case RequestVote:
 				r.HandleVoteRequest(rpc.St.(RequestVote))
+			case ClientRequest:
+				r.HandleClientRequest(rpc.St.(ClientRequest))
 			default:
 				return
 			}
@@ -157,6 +157,8 @@ func (r *RaftNode) runCandidate() {
 				r.HandleVoteRequest(rpc.St.(RequestVote))
 			case RequestVoteResp:
 				r.HandleVoteReqResp(rpc.St.(RequestVoteResp), &voteCount)
+			case ClientRequest:
+				r.HandleClientRequest(rpc.St.(ClientRequest))
 			default:
 				r.logger.Printf("%+v\n", rpc)
 			}
@@ -189,7 +191,6 @@ func (r *RaftNode) runCandidate() {
 // runs as leader until node changes state
 func (r *RaftNode) runLeader() {
 	r.logger.Printf("[INFO] %s is now leader", r.config.addr)
-	//go r.ServeClientTCP()
 	r.NoOp() // commit noop entry
 	for r.State == LEADER {
 		for _, member := range r.config.members {
@@ -204,6 +205,8 @@ func (r *RaftNode) runLeader() {
 				r.HandleAppendEntriesResp(rpc.St.(AppendEntriesResp))
 			case RequestVote:
 				r.HandleVoteRequest(rpc.St.(RequestVote))
+			case ClientRequest:
+				r.HandleClientRequest(rpc.St.(ClientRequest))
 			}
 		case sd := <-r.shutdownCh:
 			if sd == true {

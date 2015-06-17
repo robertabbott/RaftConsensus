@@ -27,10 +27,6 @@ func (r *RaftNode) RunTCPServer() {
 	}
 }
 
-func (r *RaftNode) ServeClientTCP() {
-	// listen for client requests
-}
-
 func SendStructTCP(addr string, st interface{}) {
 	conn := ConnectTCP(addr)
 	rrpc := &RaftRPC{

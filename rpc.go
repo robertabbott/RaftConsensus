@@ -47,7 +47,22 @@ type AppendEntriesResp struct {
 	Addr           string
 }
 
+type ClientRequest struct {
+	Entry *LogEntry
+}
+
 // methods for handling and sending RPC messages
+
+func (r *RaftNode) HandleClientRequest(req ClientRequest) {
+	if r.State == FOLLOWER {
+		go SendStructTCP(r.leader, req) // forward req to leader
+	} else if r.State == CANDIDATE {
+		go SendStructTCP(r.leader, req) // forward req to leader
+	} else if r.State == LEADER {
+		r.Log = append(r.Log, req.Entry)
+		r.commitIndex += 1
+	}
+}
 
 func (r *RaftNode) HandleAppendEntriesResp(req AppendEntriesResp) error {
 	if req.Success == false {
